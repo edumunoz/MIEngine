@@ -142,7 +142,7 @@ namespace MICore
                 {
                     // When 0 is passed as the signal to send in kill,
                     // it will check the validity of the pid (e.g., does the pid exist?)
-                    return UnixNativeMethods.Kill(_localDebuggerPid, 0) == 0;
+                    return UnixNativeMethods.GetPGid() >= 0;
                 }
             }
 
