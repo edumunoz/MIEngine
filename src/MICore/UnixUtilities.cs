@@ -15,7 +15,7 @@ namespace MICore
         internal const string ExitString = "exit";
         internal const string FifoPrefix = "Microsoft-MIEngine-fifo-";
         internal const string SudoPath = "/usr/bin/sudo";
-        // Mono seems to hang when the is a large response unless we specify a larger buffer here
+        // Mono seems to hang when the is a large response unless we specify a larger buffer
         internal const int StreamBufferSize = 1024 * 4;
         private const string PKExecPath = "/usr/bin/pkexec";
 
@@ -52,7 +52,7 @@ namespace MICore
                "clear; " +
                "pid=$! ; " +
                "echo $pid > {5}; " +
-               "wait $pid; ",
+               "fg > /dev/null; ",
                debuggeeDir,
                ExitString,
                exitFifo,
@@ -65,37 +65,15 @@ namespace MICore
 
         internal static string GetDebuggerCommand(LocalLaunchOptions localOptions)
         {
-            if (PlatformUtilities.IsLinux())
+            string debuggerPathCorrectElevation = localOptions.MIDebuggerPath;
+
+            // Run the debugger as root if it's needed for attach
+            if (localOptions.ProcessId != 0 && UnixUtilities.GetRequiresRootAttach(localOptions.DebuggerMIMode, localOptions.ProcessId))
             {
-                string debuggerPathCorrectElevation = localOptions.MIDebuggerPath;
-
-                // If running as root, make sure the new console is also root. 
-                bool isRoot = UnixNativeMethods.GetEUid() == 0;
-
-                // If the system doesn't allow a non-root process to attach to another process, try to run GDB as root
-                if (localOptions.ProcessId != 0 && !isRoot && UnixUtilities.GetRequiresRootAttach(localOptions.DebuggerMIMode))
-                {
-                    // Prefer pkexec for a nice graphical prompt, but fall back to sudo if it's not available
-                    if (File.Exists(UnixUtilities.PKExecPath))
-                    {
-                        debuggerPathCorrectElevation = String.Concat(UnixUtilities.PKExecPath, " ", debuggerPathCorrectElevation);
-                    }
-                    else if (File.Exists(UnixUtilities.SudoPath))
-                    {
-                        debuggerPathCorrectElevation = String.Concat(UnixUtilities.SudoPath, " ", debuggerPathCorrectElevation);
-                    }
-                    else
-                    {
-                        Debug.Fail("Root required to attach, but no means of elevating available!");
-                    }
-                }
-
-                return debuggerPathCorrectElevation;
+                debuggerPathCorrectElevation = string.Concat(GetRootCommandPrefix(), " ", debuggerPathCorrectElevation);
             }
-            else
-            {
-                return localOptions.MIDebuggerPath;
-            }
+
+            return debuggerPathCorrectElevation;
         }
 
         internal static string MakeFifo(Logger logger = null)
@@ -118,23 +96,36 @@ namespace MICore
             return path;
         }
 
-        internal static bool GetRequiresRootAttach(MIMode mode)
+        private static bool GetRequiresRootAttach(MIMode mode, int debuggeePid)
         {
             if (mode != MIMode.Clrdbg)
             {
-                // If "ptrace_scope" is a value other than 0, only root can attach to arbitrary processes
-                if (GetPtraceScope() != 0)
+                if (PlatformUtilities.IsLinux())
                 {
-                    return true; // Attaching to any non-child process requires root
+                    // If "ptrace_scope" is a value other than 0, only root can attach to arbitrary processes
+                    if (GetPtraceScope() != 0)
+                    {
+                        return true; // Attaching to any non-child process requires root
+                    }
+                }
+                else if (PlatformUtilities.IsOSX())
+                {
+                    // If kill can send a signal to the pid, it means the current process has permission
+                    // to attach, although OS X might show a dialog to authenticate as admin.
+                    return UnixNativeMethods.Kill(debuggeePid, 0) != 0;
                 }
             }
 
             return false;
         }
 
+        /// <summary>
+        /// If the system doesn't allow a non-root process to attach to another process, try to run the debugger as root.
+        /// See: https://www.kernel.org/doc/Documentation/security/Yama.txt
+        /// </summary>
+        /// <returns></returns>
         private static int GetPtraceScope()
         {
-            // See: https://www.kernel.org/doc/Documentation/security/Yama.txt
             if (!File.Exists(UnixUtilities.PtraceScopePath))
             {
                 // If the scope file doesn't exist, security is disabled
@@ -151,6 +142,32 @@ namespace MICore
                 // If we were unable to determine the current scope setting, assume we need root
                 return -1;
             }
+        }
+
+        private static string GetRootCommandPrefix()
+        {
+            if (PlatformUtilities.IsLinux())
+            {
+                // Prefer pkexec for a nice graphical prompt, but fall back to sudo if it's not available
+                if (File.Exists(UnixUtilities.PKExecPath))
+                {
+                    return UnixUtilities.PKExecPath;
+                }
+                else if (File.Exists(UnixUtilities.SudoPath))
+                {
+                    return UnixUtilities.SudoPath;
+                }
+            }
+            else if (PlatformUtilities.IsOSX())
+            {
+                if (File.Exists(UnixUtilities.SudoPath))
+                {
+                    return UnixUtilities.SudoPath;
+                }
+            }
+
+            Debug.Fail("Root required to attach, but no means of elevating available!");
+            return string.Empty;
         }
     }
 }
