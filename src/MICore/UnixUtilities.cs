@@ -150,5 +150,12 @@ namespace MICore
                 return -1;
             }
         }
+
+        internal static bool IsProcessRunning(int processId)
+        {
+            // When getting the process group ID, getpgid will return -1
+            // if there is no process with the ID specified.
+            return UnixNativeMethods.GetPGid(processId) >= 0;
+        }
     }
 }

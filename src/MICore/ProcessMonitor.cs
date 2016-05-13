@@ -30,8 +30,7 @@ namespace MICore
 
         private bool HasExited()
         {
-            // TODO change to getpgid
-            return UnixNativeMethods.Kill(_processId, 0) != 0;
+            return !UnixUtilities.IsProcessRunning(_processId);
         }
 
         private void MonitorForExit(object o)
